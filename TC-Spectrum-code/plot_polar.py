@@ -213,6 +213,175 @@ def plot_rz_panel(co, var_list=None, *, dr=1.0, r0=0.0, dz=125.0):
     return fig
 
 
+# --- TKE spectra -------------------------------------------------------------
+#
+# TKE per unit mass uses the three wind components on the polar grid:
+#     E = 0.5 * (u_r'^2 + u_theta'^2 + w'^2)
+# where primes are fluctuations about the mean along the FFT axis.
+# Spectra are formed by FFT'ing each 1-D profile and averaging the resulting
+# power spectra over the orthogonal direction (so we get a smoothed E(k),
+# not the FFT of an averaged profile).
+
+_VEL_INDICES = (1, 2, 3)   # radl, tang, vert
+
+
+def _vel_slice(co, k_lev):
+    """Return (u_r, u_t, u_w) at one vertical level as (np, nl) float64 arrays."""
+    return tuple(np.asarray(co[:, :, k_lev, i], dtype=np.float64)
+                 for i in _VEL_INDICES)
+
+
+def tke_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0, window="hann"):
+    """1D radial TKE spectrum, averaging per-azimuth spectra over azimuth.
+
+    For each azimuthal line at the chosen vertical level we subtract the
+    radial mean (DC removal), apply a Hann window, FFT in r, sum the three
+    component power spectra (* 1/2), then average the spectra across azimuth.
+
+    Returns
+    -------
+    k_r : ndarray, rad m^-1, length np//2 + 1
+    E_r : ndarray, m^3 s^-2 (PSD of TKE per radial wavenumber)
+    """
+    np_, nl, nz, _ = co.shape
+    k_lev = _level_index(nz, z_target, dz)
+    u_r, u_t, u_w = _vel_slice(co, k_lev)
+
+    # remove mean along radial axis (axis=0) -> turbulent fluctuations
+    u_r -= u_r.mean(axis=0, keepdims=True)
+    u_t -= u_t.mean(axis=0, keepdims=True)
+    u_w -= u_w.mean(axis=0, keepdims=True)
+
+    N = np_
+    if window == "hann":
+        win = np.hanning(N).reshape(N, 1)
+    elif window in ("none", "boxcar", None):
+        win = np.ones((N, 1))
+    else:
+        raise ValueError(f"unknown window {window!r}")
+    win_factor = float((win ** 2).sum()) / N    # window energy correction
+
+    Ur = np.fft.rfft(u_r * win, axis=0)
+    Ut = np.fft.rfft(u_t * win, axis=0)
+    Uw = np.fft.rfft(u_w * win, axis=0)
+
+    psd = 0.5 * (np.abs(Ur) ** 2 + np.abs(Ut) ** 2 + np.abs(Uw) ** 2)
+    psd /= (N * N * win_factor)
+    psd[1:-1, :] *= 2.0                          # one-sided
+    psd *= (N * dr) / (2.0 * np.pi)              # convert to E(k_r) (so int E dk = <TKE>)
+
+    E_r = psd.mean(axis=1)
+    k_r = 2.0 * np.pi * np.fft.rfftfreq(N, d=dr)
+    return k_r, E_r
+
+
+def tke_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0):
+    """1D azimuthal TKE spectrum, averaging per-radius spectra over radius.
+
+    The azimuthal direction is periodic, so no window is needed. For each
+    radius at the chosen vertical level we subtract the azimuthal mean,
+    FFT in azimuth, sum the three component power spectra (* 1/2), then
+    average across radius.
+
+    Returns
+    -------
+    m   : integer azimuthal mode numbers 0..nl//2
+    E_m : ndarray, m^2 s^-2 (TKE per azimuthal mode)
+    """
+    np_, nl, nz, _ = co.shape
+    k_lev = _level_index(nz, z_target, dz)
+    u_r, u_t, u_w = _vel_slice(co, k_lev)
+
+    u_r -= u_r.mean(axis=1, keepdims=True)
+    u_t -= u_t.mean(axis=1, keepdims=True)
+    u_w -= u_w.mean(axis=1, keepdims=True)
+
+    N = nl
+    Ur = np.fft.rfft(u_r, axis=1)
+    Ut = np.fft.rfft(u_t, axis=1)
+    Uw = np.fft.rfft(u_w, axis=1)
+
+    psd = 0.5 * (np.abs(Ur) ** 2 + np.abs(Ut) ** 2 + np.abs(Uw) ** 2)
+    psd /= (N * N)
+    psd[:, 1:-1] *= 2.0                          # one-sided
+
+    E_m = psd.mean(axis=0)
+    m = np.arange(N // 2 + 1)
+    return m, E_m
+
+
+def _add_kolmogorov(ax, x, y, exponent=-5.0 / 3.0, label=None):
+    """Overlay a slope-reference line on a log-log spectrum, anchored to data."""
+    mask = (x > 0) & np.isfinite(y) & (y > 0)
+    if mask.sum() < 4:
+        return
+    xs, ys = x[mask], y[mask]
+    anchor = max(1, len(xs) // 8)
+    amp = ys[anchor] / xs[anchor] ** exponent
+    ax.loglog(xs, amp * xs ** exponent, "k--", lw=1, alpha=0.6,
+              label=label or fr"$\propto k^{{{exponent:.3g}}}$")
+
+
+def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
+                         window="hann", kolmogorov=True, ax=None):
+    k_r, E_r = tke_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
+                                   window=window)
+    created = ax is None
+    fig = plt.figure(figsize=(7, 5)) if created else ax.figure
+    if created:
+        ax = fig.add_subplot(111)
+
+    mask = (k_r > 0) & (E_r > 0)
+    ax.loglog(k_r[mask], E_r[mask], "-o", ms=3, label="radial TKE spectrum")
+    if kolmogorov:
+        _add_kolmogorov(ax, k_r, E_r, exponent=-5.0 / 3.0,
+                        label=r"$k_r^{-5/3}$")
+    ax.set_xlabel(r"$k_r$ (rad m$^{-1}$)")
+    ax.set_ylabel(r"$E(k_r)$ (m$^{3}$ s$^{-2}$)")
+    z_here = (_level_index(co.shape[2], z_target, dz) + 0.5) * dz
+    ax.set_title(f"radial TKE spectrum @ z ~ {z_here:.0f} m\n"
+                 "(azimuthal mean of per-line spectra)")
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0,
+                            kolmogorov=True, ax=None):
+    m, E_m = tke_spectrum_azimuthal(co, z_target=z_target, dz=dz)
+    created = ax is None
+    fig = plt.figure(figsize=(7, 5)) if created else ax.figure
+    if created:
+        ax = fig.add_subplot(111)
+
+    mask = (m > 0) & (E_m > 0)
+    ax.loglog(m[mask], E_m[mask], "-o", ms=3, label="azimuthal TKE spectrum")
+    if kolmogorov:
+        _add_kolmogorov(ax, m.astype(float), E_m, exponent=-5.0 / 3.0,
+                        label=r"$m^{-5/3}$")
+    ax.set_xlabel(r"azimuthal mode number $m$")
+    ax.set_ylabel(r"$E(m)$ (m$^{2}$ s$^{-2}$)")
+    z_here = (_level_index(co.shape[2], z_target, dz) + 0.5) * dz
+    ax.set_title(f"azimuthal TKE spectrum @ z ~ {z_here:.0f} m\n"
+                 "(radial mean of per-radius spectra)")
+    ax.grid(True, which="both", ls=":", alpha=0.5)
+    ax.legend()
+    fig.tight_layout()
+    return fig, ax
+
+
+def plot_spectrum_both(co, *, z_target=500.0, dz=125.0, dr=1.0,
+                       window="hann", kolmogorov=True):
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    plot_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
+                         window=window, kolmogorov=kolmogorov, ax=axes[0])
+    plot_spectrum_azimuthal(co, z_target=z_target, dz=dz,
+                            kolmogorov=kolmogorov, ax=axes[1])
+    fig.tight_layout()
+    return fig
+
+
 # --- CLI ---------------------------------------------------------------------
 
 def _main(argv=None):
@@ -228,7 +397,17 @@ def _main(argv=None):
     p.add_argument("--bswap", action="store_true",
                    help="byte-swap (file was written big-endian)")
 
-    p.add_argument("--kind", choices=("polar", "rz", "panel"), default="polar")
+    p.add_argument("--kind",
+                   choices=("polar", "rz", "panel",
+                            "spec-r", "spec-az", "spec-both"),
+                   default="polar",
+                   help="polar slice, r-z cross section, multi-var panel, "
+                        "radial TKE spectrum, azimuthal TKE spectrum, or both.")
+    p.add_argument("--window", choices=("hann", "none"), default="hann",
+                   help="window for the radial FFT (non-periodic axis); "
+                        "azimuthal FFT is always unwindowed (periodic).")
+    p.add_argument("--no-kolmogorov", action="store_true",
+                   help="omit the -5/3 reference line on spectrum plots.")
     p.add_argument("--var", nargs="+", default=None,
                    help="one or more variable names (rho|radl|tang|vert|theta) "
                         "and/or 1-based indices. Pass several to get a panel "
@@ -302,6 +481,20 @@ def _main(argv=None):
                          z_target=args.z_target,
                          theta_zero=args.theta_zero,
                          clockwise=not args.ccw)
+    elif args.kind == "spec-r":
+        fig, _ = plot_spectrum_radial(co, z_target=args.z_target,
+                                      dz=args.dz, dr=args.dr,
+                                      window=args.window,
+                                      kolmogorov=not args.no_kolmogorov)
+    elif args.kind == "spec-az":
+        fig, _ = plot_spectrum_azimuthal(co, z_target=args.z_target,
+                                         dz=args.dz,
+                                         kolmogorov=not args.no_kolmogorov)
+    elif args.kind == "spec-both":
+        fig = plot_spectrum_both(co, z_target=args.z_target,
+                                 dz=args.dz, dr=args.dr,
+                                 window=args.window,
+                                 kolmogorov=not args.no_kolmogorov)
 
     if args.save:
         fig.savefig(args.save, dpi=args.dpi, bbox_inches="tight")
