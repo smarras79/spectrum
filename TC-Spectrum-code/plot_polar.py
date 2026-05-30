@@ -29,6 +29,30 @@ Run from a shell:
     python plot_polar.py test.dat --grid meso --kind panel \
         --z-target 500 --dr 2000 --dz 125 --save vars_500m.png
 
+#
+# SPECTRA
+#
+1) Default: single level nearest --z-target
+# spectrum at ~500 m only (default)
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-both --dr 100 --dz 125 --z-target 500 \
+  --save LES_spec_500m.png
+
+2)Pass --vertical to average per-level spectra across the column:
+2a)
+# average per-level spectra over all 160 vertical levels
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-both --dr 100 --dz 125 --vertical \
+  --save LES_spec_vertmean.png
+
+2b)
+# average only between 0 and 2000 m
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-both --dr 100 --dz 125 --vertical \
+  --z-min 0 --z-max 2000 \
+  --save LES_spec_vertmean_0_2km.png
+
+
 If your file is big-endian, add --bswap (same as the reader).
 """
 
