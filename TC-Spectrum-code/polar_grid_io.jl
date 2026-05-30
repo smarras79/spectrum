@@ -50,7 +50,7 @@ function read_co(filepath::AbstractString; np::Int, nl::Int, nz::Int, nvars::Int
     end
 
     if bswap
-        co .= bswap.(co)         # flip endianness in place if requested
+        co .= Base.bswap.(co)    # flip endianness in place if requested
     end
     return co
 end
@@ -64,7 +64,7 @@ stream-access format (no record markers). Equivalent to `write(15) co`.
 function write_co(filepath::AbstractString, co::AbstractArray{Float32,4}; bswap::Bool=false)
     open(filepath, "w") do io
         if bswap
-            write(io, bswap.(co))
+            write(io, Base.bswap.(co))
         else
             write(io, co)
         end
