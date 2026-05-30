@@ -1,0 +1,3 @@
+./TC-Spectrum-dat
+./TC-Spectrum-dat/*.dat
+./TC-Spectrum-dat/*.png
