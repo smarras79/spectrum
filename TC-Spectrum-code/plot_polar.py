@@ -16,12 +16,26 @@ Run from a shell:
 
     python PATH/TO/TC-Spectrum-code/polar_grid_io.py vars_polar_8099_LES.dat --grid les
 
+    # tangential wind r-z cross section (azimuthal mean), LES grid
+    python plot_polar.py test.dat --grid les --var tang --kind rz \
+        --dr 100 --dz 125 --save tang_rz.png
+
+    # multi-panel: pick the variables you want, one panel each
+    python plot_polar.py test.dat --grid les \
+        --var theta tang vert --kind polar \
+        --z-target 500 --dr 100 --dz 125 --save LES_panel_500m.png
+
+    # multi-panel: all 5 variables at one level
+    python plot_polar.py test.dat --grid meso --kind panel \
+        --z-target 500 --dr 2000 --dz 125 --save vars_500m.png
+
 If your file is big-endian, add --bswap (same as the reader).
 """
 
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import sys
 
@@ -143,20 +157,58 @@ def plot_rz(co, var="tang", *, dr=1.0, r0=0.0, dz=125.0,
     return fig, ax
 
 
-def plot_panel(co, *, dr=1.0, r0=0.0, dz=125.0, z_target=500.0,
+def _grid_shape(n):
+    """Pick a near-square (nrows, ncols) layout that fits n panels."""
+    ncols = max(1, math.ceil(math.sqrt(n)))
+    nrows = max(1, math.ceil(n / ncols))
+    return nrows, ncols
+
+
+def _resolve_var_list(co, var_list):
+    """None/empty -> all available; otherwise resolve names/ints to 0-based indices."""
+    if not var_list:
+        return list(range(min(co.shape[3], NVARS)))
+    return [_var_index(v) for v in var_list]
+
+
+def plot_panel(co, var_list=None, *, dr=1.0, r0=0.0, dz=125.0, z_target=500.0,
                theta_zero="N", clockwise=True):
-    """All 5 variables as polar slices in a 2x3 grid at one level."""
-    n = min(co.shape[3], NVARS)
-    fig = plt.figure(figsize=(15, 9))
+    """Polar slices of one or more variables in a near-square grid at one level.
+
+    var_list : iterable of names ("rho","radl","tang","vert","theta") or 0-based
+               indices; None / empty -> all 5.
+    """
+    indices = _resolve_var_list(co, var_list)
+    n = len(indices)
+    nrows, ncols = _grid_shape(n)
+    fig = plt.figure(figsize=(5.0 * ncols, 4.5 * nrows))
     last_k = None
-    for i in range(n):
-        ax = fig.add_subplot(2, 3, i + 1, projection="polar")
-        _, _, last_k = plot_slice(co, var=i, dr=dr, r0=r0, dz=dz,
+    for i, vi in enumerate(indices):
+        ax = fig.add_subplot(nrows, ncols, i + 1, projection="polar")
+        _, _, last_k = plot_slice(co, var=vi, dr=dr, r0=r0, dz=dz,
                                   z_target=z_target, theta_zero=theta_zero,
                                   clockwise=clockwise, ax=ax)
     z_here = (last_k + 0.5) * dz if last_k is not None else z_target
-    fig.suptitle(f"polar grid at z ~ {z_here:.0f} m  (k={ (last_k or 0)+1 })",
+    fig.suptitle(f"polar grid at z ~ {z_here:.0f} m  (k={(last_k or 0) + 1})",
                  fontsize=14)
+    fig.tight_layout()
+    return fig
+
+
+def plot_rz_panel(co, var_list=None, *, dr=1.0, r0=0.0, dz=125.0):
+    """Radius-height (azimuthal mean) panels for one or more variables."""
+    indices = _resolve_var_list(co, var_list)
+    n = len(indices)
+    nrows, ncols = _grid_shape(n)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5.5 * ncols, 4.0 * nrows),
+                             squeeze=False)
+    for i, vi in enumerate(indices):
+        r, c = divmod(i, ncols)
+        plot_rz(co, var=vi, dr=dr, r0=r0, dz=dz, ax=axes[r][c])
+    for i in range(n, nrows * ncols):
+        r, c = divmod(i, ncols)
+        axes[r][c].set_visible(False)
+    fig.suptitle("azimuthal-mean radius-height cross sections", fontsize=14)
     fig.tight_layout()
     return fig
 
@@ -177,8 +229,12 @@ def _main(argv=None):
                    help="byte-swap (file was written big-endian)")
 
     p.add_argument("--kind", choices=("polar", "rz", "panel"), default="polar")
-    p.add_argument("--var", default="theta",
-                   help="variable name (rho|radl|tang|vert|theta) or 1-based index")
+    p.add_argument("--var", nargs="+", default=None,
+                   help="one or more variable names (rho|radl|tang|vert|theta) "
+                        "and/or 1-based indices. Pass several to get a panel "
+                        "figure with one subplot per variable. "
+                        "If omitted: 'theta' for --kind polar, 'tang' for "
+                        "--kind rz, all 5 for --kind panel.")
     p.add_argument("--dr", type=float, default=1.0, help="radial spacing (m)")
     p.add_argument("--r0", type=float, default=0.0, help="innermost radius (m)")
     p.add_argument("--dz", type=float, default=125.0, help="vertical spacing (m)")
@@ -208,24 +264,41 @@ def _main(argv=None):
 
     co = read_co(args.filepath, **dims, nvars=args.nvars, bswap=args.bswap)
 
-    # accept either name or 1-based index from the CLI
-    var = args.var
-    try:
-        var = int(var) - 1
-    except ValueError:
-        pass
+    # accept names ("theta") or 1-based indices ("5") in any combination
+    def _parse(v):
+        try:
+            return int(v) - 1
+        except ValueError:
+            return v
+    user_vars = [_parse(v) for v in args.var] if args.var else None
 
     if args.kind == "polar":
-        fig, _, _ = plot_slice(co, var=var, dr=args.dr, r0=args.r0, dz=args.dz,
-                               z_target=args.z_target,
-                               theta_zero=args.theta_zero,
-                               clockwise=not args.ccw,
-                               cmap=args.cmap, vmin=args.vmin, vmax=args.vmax)
+        var_list = user_vars if user_vars is not None else ["theta"]
+        if len(var_list) > 1:
+            fig = plot_panel(co, var_list, dr=args.dr, r0=args.r0, dz=args.dz,
+                             z_target=args.z_target,
+                             theta_zero=args.theta_zero,
+                             clockwise=not args.ccw)
+        else:
+            fig, _, _ = plot_slice(co, var=var_list[0],
+                                   dr=args.dr, r0=args.r0, dz=args.dz,
+                                   z_target=args.z_target,
+                                   theta_zero=args.theta_zero,
+                                   clockwise=not args.ccw,
+                                   cmap=args.cmap,
+                                   vmin=args.vmin, vmax=args.vmax)
     elif args.kind == "rz":
-        fig, _ = plot_rz(co, var=var, dr=args.dr, r0=args.r0, dz=args.dz,
-                         cmap=args.cmap, vmin=args.vmin, vmax=args.vmax)
+        var_list = user_vars if user_vars is not None else ["tang"]
+        if len(var_list) > 1:
+            fig = plot_rz_panel(co, var_list,
+                                dr=args.dr, r0=args.r0, dz=args.dz)
+        else:
+            fig, _ = plot_rz(co, var=var_list[0],
+                             dr=args.dr, r0=args.r0, dz=args.dz,
+                             cmap=args.cmap, vmin=args.vmin, vmax=args.vmax)
     elif args.kind == "panel":
-        fig = plot_panel(co, dr=args.dr, r0=args.r0, dz=args.dz,
+        # user_vars=None -> all 5; otherwise just the ones they listed
+        fig = plot_panel(co, user_vars, dr=args.dr, r0=args.r0, dz=args.dz,
                          z_target=args.z_target,
                          theta_zero=args.theta_zero,
                          clockwise=not args.ccw)
