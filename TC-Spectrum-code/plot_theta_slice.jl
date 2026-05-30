@@ -13,10 +13,10 @@
 # matplotlib's polar projection is used because it tiles a (radius × azimuth)
 # field directly with the correct geometry and closes the circle cleanly.
 
-include("polar_grid_io.jl")
 using PythonPlot
 using Statistics
 
+include("polar_grid_io.jl")
 """
     plot_theta_slice(co; var_index=5, z=nothing, dz=nothing, z_target=500.0,
                      dr=1.0, r0=0.0, theta_zero="N", clockwise=true,

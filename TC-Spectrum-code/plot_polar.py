@@ -9,17 +9,12 @@ polar_grid_io.py:
 
 Run from a shell:
 
-    # theta polar slice at ~500 m, MESO grid, 2 km radial spacing
-    python plot_polar.py test.dat --grid meso --var theta --kind polar \
-        --z-target 500 --dr 2000 --dz 125 --save theta_500m.png
+    PYTHONPATH=./TC-Spectrum-code \      
+    python plot_polar.py vars_polar_8099_LES.dat \ 
+      --grid les --var theta --dr 100 --dz 125 --z-target 500 \
+      --save LES_theta_500m.png
 
-    # tangential wind r-z cross section (azimuthal mean), LES grid
-    python plot_polar.py test.dat --grid les --var tang --kind rz \
-        --dr 100 --dz 125 --save tang_rz.png
-
-    # multi-panel: all 5 variables at one level
-    python plot_polar.py test.dat --grid meso --kind panel \
-        --z-target 500 --dr 2000 --dz 125 --save vars_500m.png
+    python PATH/TO/TC-Spectrum-code/polar_grid_io.py vars_polar_8099_LES.dat --grid les
 
 If your file is big-endian, add --bswap (same as the reader).
 """
