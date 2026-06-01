@@ -52,6 +52,19 @@ PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
   --z-min 0 --z-max 2000 \
   --save LES_spec_vertmean_0_2km.png
 
+3) Radial FFT averaged over azimuth (sampled every 1 degree) and over
+   heights from z = 0 to 5 km (every level):
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-r --dr 100 --dz 125 \
+  --vertical --z-min 0 --z-max 5000 --az-step 1.0 \
+  --save LES_spec_r_1deg_0_5km.png
+
+   Or use the equivalent preset flag (sets --vertical, --z-min 0,
+   --z-max 5000, --az-step 1.0 in one shot):
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-r --dr 100 --dz 125 --avg-r-1deg-0to5km \
+  --save LES_spec_r_1deg_0_5km.png
+
 
 If your file is big-endian, add --bswap (same as the reader).
 """
@@ -265,8 +278,22 @@ def _level_range(nz, dz, z_min=None, z_max=None):
     return lo, hi
 
 
+def _azimuth_indices(nl, az_step_deg=None):
+    """Indices into the azimuth axis that sample the circle every az_step_deg.
+
+    nl cells span 360 degrees, so the native spacing is 360/nl deg per cell.
+    None or <=0 -> use all azimuth cells.
+    """
+    if az_step_deg is None or az_step_deg <= 0:
+        return np.arange(nl)
+    native = 360.0 / nl
+    stride = max(1, int(round(az_step_deg / native)))
+    return np.arange(0, nl, stride)
+
+
 def tke_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0, window="hann",
-                        vertical=False, z_min=None, z_max=None):
+                        vertical=False, z_min=None, z_max=None,
+                        az_step_deg=None):
     """1D radial TKE spectrum, averaging per-azimuth spectra over azimuth.
 
     For each azimuthal line at the chosen vertical level(s) we subtract the
@@ -282,6 +309,10 @@ def tke_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0, window="hann",
                          and average the resulting spectra.
     z_min, z_max : float or None
         Inclusive height range (m) when vertical=True. None -> open end.
+    az_step_deg : float or None
+        If given, subsample the azimuth axis to use one line every
+        az_step_deg degrees (rounded to the nearest cell stride). None or
+        <=0 uses every azimuthal cell.
 
     Returns
     -------
@@ -295,6 +326,8 @@ def tke_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0, window="hann",
     else:
         k_levels = (_level_index(nz, z_target, dz),)
 
+    az_idx = _azimuth_indices(nl, az_step_deg)
+
     N = np_
     if window == "hann":
         win = np.hanning(N).reshape(N, 1)
@@ -307,6 +340,9 @@ def tke_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0, window="hann",
     acc = np.zeros(N // 2 + 1, dtype=np.float64)
     for k_lev in k_levels:
         u_r, u_t, u_w = _vel_slice(co, k_lev)
+        u_r = u_r[:, az_idx]
+        u_t = u_t[:, az_idx]
+        u_w = u_w[:, az_idx]
         # remove mean along radial axis -> turbulent fluctuations
         u_r -= u_r.mean(axis=0, keepdims=True)
         u_t -= u_t.mean(axis=0, keepdims=True)
@@ -398,10 +434,12 @@ def _z_label(co, dz, vertical, z_target, z_min, z_max):
 
 def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
                          window="hann", kolmogorov=True,
-                         vertical=False, z_min=None, z_max=None, ax=None):
+                         vertical=False, z_min=None, z_max=None,
+                         az_step_deg=None, ax=None):
     k_r, E_r = tke_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
                                    window=window, vertical=vertical,
-                                   z_min=z_min, z_max=z_max)
+                                   z_min=z_min, z_max=z_max,
+                                   az_step_deg=az_step_deg)
     created = ax is None
     fig = plt.figure(figsize=(7, 5)) if created else ax.figure
     if created:
@@ -414,8 +452,12 @@ def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
                         label=r"$k_r^{-5/3}$")
     ax.set_xlabel(r"$k_r$ (rad m$^{-1}$)")
     ax.set_ylabel(r"$E(k_r)$ (m$^{3}$ s$^{-2}$)")
+    nl = co.shape[1]
+    n_az = len(_azimuth_indices(nl, az_step_deg))
+    az_note = (f"every {az_step_deg:g} deg, {n_az} lines"
+               if az_step_deg else f"all {nl} lines")
     ax.set_title(f"radial TKE spectrum @ {_z_label(co, dz, vertical, z_target, z_min, z_max)}\n"
-                 "(azimuthal mean of per-line spectra)")
+                 f"(azimuthal mean of per-line spectra: {az_note})")
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend()
     fig.tight_layout()
@@ -449,11 +491,13 @@ def plot_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0,
 
 def plot_spectrum_both(co, *, z_target=500.0, dz=125.0, dr=1.0,
                        window="hann", kolmogorov=True,
-                       vertical=False, z_min=None, z_max=None):
+                       vertical=False, z_min=None, z_max=None,
+                       az_step_deg=None):
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     plot_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
                          window=window, kolmogorov=kolmogorov,
                          vertical=vertical, z_min=z_min, z_max=z_max,
+                         az_step_deg=az_step_deg,
                          ax=axes[0])
     plot_spectrum_azimuthal(co, z_target=z_target, dz=dz,
                             kolmogorov=kolmogorov,
@@ -498,6 +542,17 @@ def _main(argv=None):
                    help="lower height bound (m) for --vertical averaging.")
     p.add_argument("--z-max", type=float, default=None,
                    help="upper height bound (m) for --vertical averaging.")
+    p.add_argument("--az-step", type=float, default=None,
+                   help="radial spectrum only: subsample azimuth, using one "
+                        "FFT line every AZ_STEP degrees (e.g. 1.0 means one "
+                        "spectrum per degree, averaged over those lines). "
+                        "Default: use every azimuthal cell.")
+    p.add_argument("--avg-r-1deg-0to5km", action="store_true",
+                   help="preset for --kind spec-r/spec-both: take the radial "
+                        "FFT, sample every 1 deg in azimuth and every level "
+                        "from z=0 to z=5 km, and average those spectra. "
+                        "Equivalent to --vertical --z-min 0 --z-max 5000 "
+                        "--az-step 1.0.")
     p.add_argument("--var", nargs="+", default=None,
                    help="one or more variable names (rho|radl|tang|vert|theta) "
                         "and/or 1-based indices. Pass several to get a panel "
@@ -532,6 +587,15 @@ def _main(argv=None):
         dims = dict(np_=args.np_, nl=args.nl, nz=args.nz)
 
     co = read_co(args.filepath, **dims, nvars=args.nvars, bswap=args.bswap)
+
+    if args.avg_r_1deg_0to5km:
+        args.vertical = True
+        if args.z_min is None:
+            args.z_min = 0.0
+        if args.z_max is None:
+            args.z_max = 5000.0
+        if args.az_step is None:
+            args.az_step = 1.0
 
     # accept names ("theta") or 1-based indices ("5") in any combination
     def _parse(v):
@@ -577,7 +641,8 @@ def _main(argv=None):
                                       window=args.window,
                                       kolmogorov=not args.no_kolmogorov,
                                       vertical=args.vertical,
-                                      z_min=args.z_min, z_max=args.z_max)
+                                      z_min=args.z_min, z_max=args.z_max,
+                                      az_step_deg=args.az_step)
     elif args.kind == "spec-az":
         fig, _ = plot_spectrum_azimuthal(co, z_target=args.z_target,
                                          dz=args.dz,
@@ -590,7 +655,8 @@ def _main(argv=None):
                                  window=args.window,
                                  kolmogorov=not args.no_kolmogorov,
                                  vertical=args.vertical,
-                                 z_min=args.z_min, z_max=args.z_max)
+                                 z_min=args.z_min, z_max=args.z_max,
+                                 az_step_deg=args.az_step)
 
     if args.save:
         fig.savefig(args.save, dpi=args.dpi, bbox_inches="tight")
