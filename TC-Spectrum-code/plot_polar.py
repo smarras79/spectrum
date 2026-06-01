@@ -66,6 +66,15 @@ PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
   --save LES_spec_r_1deg_0_5km.png
 
 
+4) Overlay LES and MESO spectra on the same plot:
+# vertical-mean spectrum for both LES and MESO between 0 and 2 km
+PYTHONPATH=./TC-Spectrum-code python plot_polar.py vars_polar_8099_LES.dat \
+  --grid les --kind spec-both --dr 100 --dz 125 --vertical \
+  --z-min 0 --z-max 2000 \
+  --overlay-file vars_polar_8099_MESO.dat --overlay-grid meso \
+  --overlay-dr 2000 \
+  --save LES_vs_MESO_spec_0_2km.png
+
 If your file is big-endian, add --bswap (same as the reader).
 """
 
@@ -435,7 +444,7 @@ def _z_label(co, dz, vertical, z_target, z_min, z_max):
 def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
                          window="hann", kolmogorov=True,
                          vertical=False, z_min=None, z_max=None,
-                         az_step_deg=None, ax=None):
+                         az_step_deg=None, ax=None, label=None, title=None):
     k_r, E_r = tke_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
                                    window=window, vertical=vertical,
                                    z_min=z_min, z_max=z_max,
@@ -446,7 +455,8 @@ def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
         ax = fig.add_subplot(111)
 
     mask = (k_r > 0) & (E_r > 0)
-    ax.loglog(k_r[mask], E_r[mask], "-o", ms=3, label="radial TKE spectrum")
+    ax.loglog(k_r[mask], E_r[mask], "-o", ms=3,
+              label=label or "radial TKE spectrum")
     if kolmogorov:
         _add_kolmogorov(ax, k_r, E_r, exponent=-5.0 / 3.0,
                         label=r"$k_r^{-5/3}$")
@@ -456,8 +466,10 @@ def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
     n_az = len(_azimuth_indices(nl, az_step_deg))
     az_note = (f"every {az_step_deg:g} deg, {n_az} lines"
                if az_step_deg else f"all {nl} lines")
-    ax.set_title(f"radial TKE spectrum @ {_z_label(co, dz, vertical, z_target, z_min, z_max)}\n"
-                 f"(azimuthal mean of per-line spectra: {az_note})")
+    default_title = (f"radial TKE spectrum @ "
+                     f"{_z_label(co, dz, vertical, z_target, z_min, z_max)}\n"
+                     f"(azimuthal mean of per-line spectra: {az_note})")
+    ax.set_title(title if title is not None else default_title)
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend()
     fig.tight_layout()
@@ -466,7 +478,8 @@ def plot_spectrum_radial(co, *, z_target=500.0, dz=125.0, dr=1.0,
 
 def plot_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0,
                             kolmogorov=True, vertical=False,
-                            z_min=None, z_max=None, ax=None):
+                            z_min=None, z_max=None, ax=None,
+                            label=None, title=None):
     m, E_m = tke_spectrum_azimuthal(co, z_target=z_target, dz=dz,
                                     vertical=vertical, z_min=z_min, z_max=z_max)
     created = ax is None
@@ -475,14 +488,17 @@ def plot_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0,
         ax = fig.add_subplot(111)
 
     mask = (m > 0) & (E_m > 0)
-    ax.loglog(m[mask], E_m[mask], "-o", ms=3, label="azimuthal TKE spectrum")
+    ax.loglog(m[mask], E_m[mask], "-o", ms=3,
+              label=label or "azimuthal TKE spectrum")
     if kolmogorov:
         _add_kolmogorov(ax, m.astype(float), E_m, exponent=-5.0 / 3.0,
                         label=r"$m^{-5/3}$")
     ax.set_xlabel(r"azimuthal mode number $m$")
     ax.set_ylabel(r"$E(m)$ (m$^{2}$ s$^{-2}$)")
-    ax.set_title(f"azimuthal TKE spectrum @ {_z_label(co, dz, vertical, z_target, z_min, z_max)}\n"
-                 "(radial mean of per-radius spectra)")
+    default_title = (f"azimuthal TKE spectrum @ "
+                     f"{_z_label(co, dz, vertical, z_target, z_min, z_max)}\n"
+                     "(radial mean of per-radius spectra)")
+    ax.set_title(title if title is not None else default_title)
     ax.grid(True, which="both", ls=":", alpha=0.5)
     ax.legend()
     fig.tight_layout()
@@ -492,19 +508,24 @@ def plot_spectrum_azimuthal(co, *, z_target=500.0, dz=125.0,
 def plot_spectrum_both(co, *, z_target=500.0, dz=125.0, dr=1.0,
                        window="hann", kolmogorov=True,
                        vertical=False, z_min=None, z_max=None,
-                       az_step_deg=None):
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+                       az_step_deg=None, ax_r=None, ax_az=None,
+                       label=None, title_r=None, title_az=None):
+    if ax_r is None or ax_az is None:
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+        ax_r, ax_az = axes[0], axes[1]
+    else:
+        fig = ax_r.figure
     plot_spectrum_radial(co, z_target=z_target, dz=dz, dr=dr,
                          window=window, kolmogorov=kolmogorov,
                          vertical=vertical, z_min=z_min, z_max=z_max,
                          az_step_deg=az_step_deg,
-                         ax=axes[0])
+                         ax=ax_r, label=label, title=title_r)
     plot_spectrum_azimuthal(co, z_target=z_target, dz=dz,
                             kolmogorov=kolmogorov,
                             vertical=vertical, z_min=z_min, z_max=z_max,
-                            ax=axes[1])
+                            ax=ax_az, label=label, title=title_az)
     fig.tight_layout()
-    return fig
+    return fig, ax_r, ax_az
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -572,6 +593,35 @@ def _main(argv=None):
                    help="azimuth increases counter-clockwise (default: clockwise)")
     p.add_argument("--save", help="save PNG to this path instead of showing")
     p.add_argument("--dpi", type=int, default=150)
+
+    # --- overlay (second dataset, typically LES vs MESO) -------------------
+    p.add_argument("--overlay-file",
+                   help="second data file whose spectrum will be overlaid "
+                        "on the same axes as the primary spectrum. Use this "
+                        "to plot LES and MESO spectra together. Only used "
+                        "with --kind spec-r/spec-az/spec-both.")
+    p.add_argument("--overlay-grid", choices=("les", "meso"),
+                   help="grid preset for --overlay-file. Defaults to the "
+                        "opposite of --grid (les<->meso).")
+    p.add_argument("--overlay-np", dest="overlay_np_", type=int)
+    p.add_argument("--overlay-nl", type=int)
+    p.add_argument("--overlay-nz", type=int)
+    p.add_argument("--overlay-nvars", type=int, default=NVARS)
+    p.add_argument("--overlay-bswap", action="store_true",
+                   help="byte-swap the overlay file (big-endian).")
+    p.add_argument("--overlay-dr", type=float, default=None,
+                   help="radial spacing (m) for --overlay-file. Defaults: "
+                        "100 for overlay-grid=les, 2000 for overlay-grid=meso, "
+                        "else falls back to --dr.")
+    p.add_argument("--overlay-dz", type=float, default=None,
+                   help="vertical spacing (m) for --overlay-file. "
+                        "Default: --dz.")
+    p.add_argument("--primary-label",
+                   help="legend label for the primary spectrum. "
+                        "Default: uppercased --grid (e.g. 'LES').")
+    p.add_argument("--overlay-label",
+                   help="legend label for the overlay spectrum. "
+                        "Default: uppercased --overlay-grid (e.g. 'MESO').")
     args = p.parse_args(argv)
 
     if args.grid == "les":
@@ -635,28 +685,124 @@ def _main(argv=None):
                          z_target=args.z_target,
                          theta_zero=args.theta_zero,
                          clockwise=not args.ccw)
-    elif args.kind == "spec-r":
-        fig, _ = plot_spectrum_radial(co, z_target=args.z_target,
-                                      dz=args.dz, dr=args.dr,
-                                      window=args.window,
-                                      kolmogorov=not args.no_kolmogorov,
-                                      vertical=args.vertical,
-                                      z_min=args.z_min, z_max=args.z_max,
-                                      az_step_deg=args.az_step)
-    elif args.kind == "spec-az":
-        fig, _ = plot_spectrum_azimuthal(co, z_target=args.z_target,
-                                         dz=args.dz,
-                                         kolmogorov=not args.no_kolmogorov,
-                                         vertical=args.vertical,
-                                         z_min=args.z_min, z_max=args.z_max)
-    elif args.kind == "spec-both":
-        fig = plot_spectrum_both(co, z_target=args.z_target,
-                                 dz=args.dz, dr=args.dr,
-                                 window=args.window,
-                                 kolmogorov=not args.no_kolmogorov,
-                                 vertical=args.vertical,
-                                 z_min=args.z_min, z_max=args.z_max,
-                                 az_step_deg=args.az_step)
+    elif args.kind in ("spec-r", "spec-az", "spec-both"):
+        # ---- resolve overlay (LES vs MESO) dataset, if any ----------------
+        co_ov = None
+        ov_dr = None
+        ov_dz = None
+        primary_label = (args.primary_label
+                         or (args.grid.upper() if args.grid else "primary"))
+        overlay_label = None
+        if args.overlay_file:
+            if args.overlay_grid:
+                ov_grid = args.overlay_grid
+            elif args.grid == "les":
+                ov_grid = "meso"
+            elif args.grid == "meso":
+                ov_grid = "les"
+            else:
+                ov_grid = None
+
+            if ov_grid == "les":
+                ov_dims = dict(np_=1000, nl=1800, nz=160)
+            elif ov_grid == "meso":
+                ov_dims = dict(np_=45, nl=360, nz=160)
+            else:
+                ov_missing = [n for n, v in
+                              (("--overlay-np", args.overlay_np_),
+                               ("--overlay-nl", args.overlay_nl),
+                               ("--overlay-nz", args.overlay_nz)) if v is None]
+                if ov_missing:
+                    p.error("supply --overlay-grid, or all of --overlay-np "
+                            "--overlay-nl --overlay-nz; missing "
+                            + ", ".join(ov_missing))
+                ov_dims = dict(np_=args.overlay_np_, nl=args.overlay_nl,
+                               nz=args.overlay_nz)
+
+            co_ov = read_co(args.overlay_file, **ov_dims,
+                            nvars=args.overlay_nvars, bswap=args.overlay_bswap)
+
+            if args.overlay_dr is not None:
+                ov_dr = args.overlay_dr
+            elif ov_grid == "les":
+                ov_dr = 100.0
+            elif ov_grid == "meso":
+                ov_dr = 2000.0
+            else:
+                ov_dr = args.dr
+            ov_dz = args.overlay_dz if args.overlay_dz is not None else args.dz
+
+            overlay_label = (args.overlay_label
+                             or (ov_grid.upper() if ov_grid else "overlay"))
+
+        overlay_title_r = ("radial TKE spectrum: "
+                           f"{primary_label} vs {overlay_label}"
+                           if co_ov is not None else None)
+        overlay_title_az = ("azimuthal TKE spectrum: "
+                            f"{primary_label} vs {overlay_label}"
+                            if co_ov is not None else None)
+
+        if args.kind == "spec-r":
+            fig, ax = plot_spectrum_radial(co, z_target=args.z_target,
+                                           dz=args.dz, dr=args.dr,
+                                           window=args.window,
+                                           kolmogorov=not args.no_kolmogorov,
+                                           vertical=args.vertical,
+                                           z_min=args.z_min, z_max=args.z_max,
+                                           az_step_deg=args.az_step,
+                                           label=primary_label,
+                                           title=overlay_title_r)
+            if co_ov is not None:
+                plot_spectrum_radial(co_ov, z_target=args.z_target,
+                                     dz=ov_dz, dr=ov_dr,
+                                     window=args.window,
+                                     kolmogorov=False,
+                                     vertical=args.vertical,
+                                     z_min=args.z_min, z_max=args.z_max,
+                                     az_step_deg=args.az_step,
+                                     ax=ax, label=overlay_label,
+                                     title=overlay_title_r)
+        elif args.kind == "spec-az":
+            fig, ax = plot_spectrum_azimuthal(co, z_target=args.z_target,
+                                              dz=args.dz,
+                                              kolmogorov=not args.no_kolmogorov,
+                                              vertical=args.vertical,
+                                              z_min=args.z_min,
+                                              z_max=args.z_max,
+                                              label=primary_label,
+                                              title=overlay_title_az)
+            if co_ov is not None:
+                plot_spectrum_azimuthal(co_ov, z_target=args.z_target,
+                                        dz=ov_dz,
+                                        kolmogorov=False,
+                                        vertical=args.vertical,
+                                        z_min=args.z_min, z_max=args.z_max,
+                                        ax=ax, label=overlay_label,
+                                        title=overlay_title_az)
+        else:  # spec-both
+            fig, ax_r, ax_az = plot_spectrum_both(
+                co, z_target=args.z_target,
+                dz=args.dz, dr=args.dr,
+                window=args.window,
+                kolmogorov=not args.no_kolmogorov,
+                vertical=args.vertical,
+                z_min=args.z_min, z_max=args.z_max,
+                az_step_deg=args.az_step,
+                label=primary_label,
+                title_r=overlay_title_r,
+                title_az=overlay_title_az)
+            if co_ov is not None:
+                plot_spectrum_both(co_ov, z_target=args.z_target,
+                                   dz=ov_dz, dr=ov_dr,
+                                   window=args.window,
+                                   kolmogorov=False,
+                                   vertical=args.vertical,
+                                   z_min=args.z_min, z_max=args.z_max,
+                                   az_step_deg=args.az_step,
+                                   ax_r=ax_r, ax_az=ax_az,
+                                   label=overlay_label,
+                                   title_r=overlay_title_r,
+                                   title_az=overlay_title_az)
 
     if args.save:
         fig.savefig(args.save, dpi=args.dpi, bbox_inches="tight")
